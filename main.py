@@ -48,6 +48,30 @@ with tabs[0]:
     frame_skip = st.sidebar.slider("Frame Skip", 1, 100, 20)
     save_video = st.sidebar.checkbox("Save annotated video")
     rotate_view = st.sidebar.selectbox("Rotate view", ["None", "90° Clockwise", "90° Counterclockwise"])
+    quality_factor = st.sidebar.slider(
+        "🔬 Quality Factor (0.0 – 1.0)",
+        min_value=0.0,
+        max_value=1.0,
+        value=1.0,
+        step=0.01,
+        format="%.2f",
+        help="Value between 0 (completely defective) and 1 (perfect quality)"
+    )
+
+    quality_reason = st.sidebar.selectbox(
+        "📋 Reason for Quality Loss (optional)",
+        options=[
+            "None",
+            "Dimensional deviation",
+            "Rework required",
+            "Wrong tool used",
+            "Damaged part",
+            "Other"
+        ],
+        index=0
+    )
+
+
 
     video_file = None
     camera_index = 0
@@ -135,6 +159,9 @@ with tabs[0]:
 
     def process_video(path_or_index):
         cap = cv2.VideoCapture(path_or_index)
+        # Clear previous data when a new video or camera stream is processed
+        st.session_state.history_data = []
+
 
         if not cap.isOpened():
             st.error(f"❌ Camera at index {path_or_index} could not be opened.")
@@ -230,23 +257,29 @@ with tabs[2]:
     else:
         df = pd.DataFrame(st.session_state.history_data)
 
-        # --- Step 1: Final Cycle Detection (fehlertolerant)
+        # --- Step 1: Final Cycle Detection (robust gegen Frame Skipping) ---
         final_cycles = []
         i = 0
-        min_duration = 10  # Mindestdauer für einen vollständigen Zyklus (in Frames)
+        min_duration = 3  # Mindestanzahl geskipter Frames für einen Zyklus
+
+        # Toleranzschwelle in echten Frames (z. B. 100 echte Frames Leerlauf erlaubt)
+        base_idle_tolerance_in_frames = 100
+        max_tolerated_idle = max(1, base_idle_tolerance_in_frames // frame_skip)
+
+        # Optional zur Anzeige für dich:
+        st.caption(f"🧪 Max tolerated idle = {max_tolerated_idle} steps (≈ {max_tolerated_idle * frame_skip} frames)")
 
         while i < len(df):
             if df.loc[i, "Machine State"] == "Machining":
                 start_idx = i
                 j = i + 1
                 non_machining_streak = 0
-                max_tolerated_idle = 10  # z. B. max. 5 Frames Idle/Maintenance dazwischen erlaubt
 
                 while j < len(df):
                     state = df.loc[j, "Machine State"]
 
                     if state == "Machining":
-                        non_machining_streak = 0  # zurücksetzen
+                        non_machining_streak = 0  # Reset streak
                     elif state in {"Idle", "Maintenance", "Unknown"}:
                         non_machining_streak += 1
                         if non_machining_streak > max_tolerated_idle:
@@ -264,12 +297,14 @@ with tabs[2]:
                         "Cycle #": len(final_cycles) + 1,
                         "Start Frame": df.loc[start_idx, "Frame"],
                         "End Frame": df.loc[end_idx, "Frame"],
-                        "Duration (s)": duration
+                        "Duration (frames)": duration,
+                        "Duration (s)": duration * frame_skip / 30.0  # assuming 30 fps
                     })
 
                 i = j
             else:
                 i += 1
+
 
 
         # --- Step 2: Robust KPI Calculation ---
@@ -284,7 +319,18 @@ with tabs[2]:
 
         availability = operating_time / total_time if total_time else 0
         performance = machining_time / operating_time if operating_time else 0
-        quality = 1.0  # angenommen
+        quality = quality_factor  # taken from sidebar
+        st.markdown(f"**Selected Quality Factor:** {quality:.2f}")
+        if quality_reason != "None":
+            st.markdown(f"**Reason for Quality Loss:** {quality_reason}")
+        if quality < 0.9:
+            st.warning("⚠️ Quality below 90%. This significantly reduces the OEE.")
+
+
+        
+
+       
+
 
         oee = availability * performance * quality
 
@@ -533,35 +579,43 @@ with tabs[2]:
                         margin=dict(l=10, r=10, t=30, b=30)
                     )
 
-                    # Zwei Diagramme nebeneinander anzeigen
-                    with col5:
-                        st.markdown("### 📊 Machine State + Visibility Combined")
 
-                        # Farben für Machine States
+                    #  Machine States + Visibility Combined Chart
+                    with col5:
+                        st.markdown("### 📊 Machine State Distribution + Visibility (%)")
+
+                        # Farben definieren
                         state_colors = {
-                            "Setup": "lightgray", "Machining": "steelblue",
-                            "Inspection (Planned)": "lightgreen", "Inspection (Unplanned)": "salmon",
-                            "Maintenance": "orange", "Idle": "lightyellow", "Unknown": "lightpink"
+                            "Setup": "lightgray",
+                            "Machining": "steelblue",
+                            "Inspection (Planned)": "lightgreen",
+                            "Inspection (Unplanned)": "salmon",
+                            "Maintenance": "orange",
+                            "Idle": "lightyellow",
+                            "Unknown": "lightpink"
                         }
 
-                        # Aggregation vorbereiten
-                        cycle_visibility = df.groupby("Cycle #")["Visibility %"].mean().reset_index()
-                        cycle_states = df.groupby("Cycle #")["Machine State"].first().reset_index()
+                        # Zähle Frames pro Zustand und Zyklus
+                        cycle_state_counts = df.groupby(["Cycle #", "Machine State"]).size().unstack(fill_value=0)
+                        total_per_cycle = cycle_state_counts.sum(axis=1)
+                        normalized = cycle_state_counts.div(total_per_cycle, axis=0) * 100  # Prozentual
 
-                        # Neue Figure mit Balken
+                        normalized = normalized.reindex(sorted(normalized.index))  # nach Cycle sortieren
+
+                        # Stacked Bar Chart
                         fig_comb = go.Figure()
 
                         for state, color in state_colors.items():
-                            mask = cycle_states["Machine State"] == state
-                            fig_comb.add_trace(go.Bar(
-                                x=cycle_states[mask]["Cycle #"],
-                                y=[5] * mask.sum(),  # Dummyhöhe für Visualisierung
-                                name=state,
-                                marker_color=color,
-                                opacity=0.8
-                            ))
+                            if state in normalized.columns:
+                                fig_comb.add_trace(go.Bar(
+                                    x=normalized.index,
+                                    y=normalized[state],
+                                    name=state,
+                                    marker_color=color
+                                ))
 
-                        # Sichtbarkeitslinie drüberlegen
+                        # Sichtbarkeitslinie
+                        cycle_visibility = df.groupby("Cycle #")["Visibility %"].mean().reset_index()
                         fig_comb.add_trace(go.Scatter(
                             x=cycle_visibility["Cycle #"],
                             y=cycle_visibility["Visibility %"],
@@ -572,18 +626,27 @@ with tabs[2]:
                             marker=dict(size=4)
                         ))
 
-                        # Layout mit zwei Achsen
+                        # Layout anpassen
                         fig_comb.update_layout(
+                            barmode="stack",
                             height=400,
                             xaxis_title="Machining Cycle",
-                            yaxis=dict(title="Machine State", showticklabels=False),
-                            yaxis2=dict(title="Visibility (%)", overlaying="y", side="right", range=[0, 100]),
+                            yaxis=dict(title="Machine State Share (%)", range=[0, 100]),
+                            yaxis2=dict(
+                                title="Visibility (%)",
+                                overlaying="y",
+                                side="right",
+                                range=[0, 100]
+                            ),
                             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                             margin=dict(l=30, r=30, t=30, b=30),
                             plot_bgcolor="white"
                         )
 
                         st.plotly_chart(fig_comb, use_container_width=True)
+
+
+
 
 
                     # --- Recovery Time & Summary Report ---
@@ -629,7 +692,9 @@ with tabs[2]:
                     = {availability:.3f} ({availability*100:.1f}%)
                     - Performance = Machining Time / Operating Time
                     = {performance:.3f} ({performance*100:.1f}%)
-                    - Quality = 1.0
+                    - - Quality = {quality:.2f}
+                    - Quality Reason = {quality_reason}
+
                     - OEE = {oee:.3f} ({oee*100:.1f}%)
 
                     Note:
@@ -643,10 +708,4 @@ with tabs[2]:
                             file_name="cnc_kpi_summary.txt",
                             mime="text/plain"
                         )
-  
-
-
-
-        
-
                
