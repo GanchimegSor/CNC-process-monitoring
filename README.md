@@ -31,7 +31,7 @@ Monitor and evaluate CNC machining operations by:
 ## 📦 Installation
 
 **1. Clone the repository:**
-git clone https://github.com/yourusername/cnc-process-monitoring.git
+git clone https://github.com/GanchimegSor/CNC-process-monitoring.git
 cd cnc-process-monitoring
 
 **2. Create and activate a virtual environment (optional):**
