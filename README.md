@@ -99,7 +99,7 @@ The system tolerates up to **5 consecutive Idle/Unknown frames** to prevent frag
 
 ## 📁 Project Structure
 
-```text
+
 cnc-process-monitoring/
 ├── main.py            # Main Python code for Streamlit app
 ├── v1.pt              # YOLOv8 model weights
@@ -108,8 +108,8 @@ cnc-process-monitoring/
 ├── v4.pt              # YOLOv8 model weights
 ├── requirements.txt   # Project dependencies
 └── README.md
+```
 
-(`\`\`\``)
 
 ## 🧩 Dependencies
 
