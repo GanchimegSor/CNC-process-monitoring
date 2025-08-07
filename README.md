@@ -108,7 +108,7 @@ cnc-process-monitoring/
 ├── v4.pt              # YOLOv8 model weights
 ├── requirements.txt   # Project dependencies
 └── README.md
-```
+
 
 
 ## 🧩 Dependencies
